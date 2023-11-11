@@ -1,0 +1,60 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  push:
+    tags:
+    - v*
+  workflow_dispatch:
+    inputs:
+      failJob:
+        description: Fail the job?
+        type: boolean
+        required: true
+        default: false    
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.19
+
+    - name: Get version
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}        
+
+    - name: Build win x64
+      run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o LongProxy_win_x64.exe proxy.go
+
+    - name: Build mac x64
+      run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o LongProxy_mac_x64 proxy.go
+
+    - name: Build mac m1
+      run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o  LongProxy_mac_arm64 proxy.go
+
+    - name: Build linux x64
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o LongProxy_linux_x64 proxy.go
+
+    - name: Build liunx arm64
+      run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o LongProxy_linux_arm64 proxy.go
+
+    - name: Upload
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        files: |
+          LongProxy_win_x64.exe
+          LongProxy_mac_x64
+          LongProxy_mac_arm64
+          LongProxy_linux_x64
+          LongProxy_linux_arm64          
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
