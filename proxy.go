@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"reflect"
@@ -89,6 +90,17 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 复制请求头
 	copyHeaders(proxyReq.Header, r.Header)
+
+	// 添加 X-Forwarded-For 头部，包含原始请求的客户端 IP 地址和转发请求的 IP 地址
+	clientIP := getClientIP(r)
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if len(forwardedFor) > 0 {
+		forwardedFor += ", " + clientIP
+	} else {
+		forwardedFor = clientIP
+	}
+	proxyReq.Header.Set("X-Forwarded-For", forwardedFor)
+	proxyReq.Header.Set("X-Real-IP", clientIP)
 
 	// 发送代理请求
 	resp, err := client.Do(proxyReq)
@@ -266,4 +278,19 @@ func isSameChannel(ch1, ch2 interface{}) bool {
 
 	// 比较两个指针的地址是否相同
 	return p1 == p2
+}
+
+// 获取客户端 IP 地址
+func getClientIP(r *http.Request) string {
+	// 获取 X-Forwarded-For 头部的第一个 IP 地址，即客户端的真实 IP 地址
+	// 如果 X-Forwarded-For 头部不存在，则直接使用 RemoteAddr 字段的值作为客户端 IP 地址
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		ips := strings.Split(forwardedFor, ",")
+		ip := strings.TrimSpace(ips[0])
+		return ip
+	}
+
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
 }

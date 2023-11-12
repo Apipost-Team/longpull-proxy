@@ -9,11 +9,10 @@ on:
     - v*
   workflow_dispatch:
     inputs:
-      failJob:
-        description: Fail the job?
-        type: boolean
-        required: true
-        default: false    
+        tag:
+            description: Select a tag
+            required: true
+            default: "latest"
 
 jobs:
 
