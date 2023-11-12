@@ -11,7 +11,9 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,13 +27,21 @@ var (
 	blockMap = make(map[string]chan<- struct{})
 	client   = &http.Client{
 		Transport: transport,
+		//Timeout:   5 * time.Second, // 设置超时时间为 5 秒
 	}
-	backendBase string
+	backendBase     string       //后端服务地址
+	requestCount    = new(int32) //请求数量
+	serverStartTime = time.Now() //服务启动时间
+
 )
 
 type StatusResponse struct {
-	Goroutines int `json:"goroutines"`
-	BlockCount int `json:"block_count"`
+	Goroutines   int    `json:"goroutines"`
+	BlockCount   int    `json:"block_count"`
+	RequestCount int32  `json:"request_count"`
+	Uptime       string `json:"uptime"`
+	MemStats     string `json:"mem_stats"`
+	GoVersion    string `json:"go_version"`
 }
 
 func main() {
@@ -66,7 +76,10 @@ func main() {
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
+	start := time.Now()              //记录开始请求时间
+	atomic.AddInt32(requestCount, 1) //工作进程加1
+	defer atomic.AddInt32(requestCount, -1)
+
 	// 读取请求体
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -244,9 +257,16 @@ func cancelBlockHandler(w http.ResponseWriter, r *http.Request) {
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
 	goroutines := runtime.NumGoroutine()
+	uptime := time.Since(serverStartTime).String()
+	memStats := runtime.MemStats{}
+	runtime.ReadMemStats(&memStats)
 	status := StatusResponse{
-		Goroutines: goroutines,
-		BlockCount: len(blockMap),
+		Goroutines:   goroutines,
+		BlockCount:   len(blockMap),
+		RequestCount: *requestCount,
+		Uptime:       uptime,
+		MemStats:     formatBytes(memStats.Alloc),
+		GoVersion:    runtime.Version(),
 	}
 	responseJSON, err := json.Marshal(status)
 	if err != nil {
@@ -293,4 +313,18 @@ func getClientIP(r *http.Request) string {
 
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return ip
+}
+
+// 格式化数字
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return strconv.FormatUint(bytes, 10) + " B"
+	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
