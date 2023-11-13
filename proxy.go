@@ -30,6 +30,7 @@ var (
 		//Timeout:   5 * time.Second, // 设置超时时间为 5 秒
 	}
 	backendBase     string       //后端服务地址
+	BlockServer     string       //本机服务地址
 	requestCount    = new(int32) //请求数量
 	serverStartTime = time.Now() //服务启动时间
 
@@ -64,6 +65,17 @@ func main() {
 		os.Exit(1)
 	}
 	backendBase = strings.TrimRight(*backend, "/") //去除末尾反斜杠
+
+	//获取相对后端ip
+	backendHost := extractHost(backendBase)
+	serverIp, err := getLocalIP(backendHost)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("get local ip error, may backend is error")
+		return
+	}
+	BlockServer = "http://" + serverIp + ":" + strconv.Itoa(*port)
+	log.Println("BlockServer:", BlockServer)
 
 	//http.HandleFunc("/", helloHandler)
 	http.HandleFunc("/cancel", cancelBlockHandler) //取消阻塞
@@ -114,6 +126,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyReq.Header.Set("X-Forwarded-For", forwardedFor)
 	proxyReq.Header.Set("X-Real-IP", clientIP)
+	proxyReq.Header.Set("X-Block-Server", BlockServer)
 
 	// 发送代理请求
 	resp, err := client.Do(proxyReq)
@@ -327,4 +340,38 @@ func formatBytes(bytes uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// 从 URL 中提取 host
+func extractHost(urlString string) string {
+	// 查找 "://" 的索引
+	separatorIndex := strings.Index(urlString, "://")
+	if separatorIndex == -1 {
+		separatorIndex = -3
+	}
+
+	// 去除头部部分
+	withoutProtocol := urlString[separatorIndex+3:]
+
+	// 查找下一个斜杠的索引
+	slashIndex := strings.IndexByte(withoutProtocol, '/')
+	if slashIndex != -1 {
+		return withoutProtocol[:slashIndex]
+	}
+	return withoutProtocol
+}
+
+// 获取本机ip
+func getLocalIP(address string) (string, error) {
+	if !strings.Contains(address, ":") {
+		address += ":80"
+	}
+	conn, err := net.Dial("udp", address)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String(), nil
 }
