@@ -5,8 +5,9 @@ HTTP 长轮询(Long Polling) 是一种实现服务器推送的技术。能减少
 
 # 原理
 这是一个透明代理。当后端返回Header中带有X-Block:10s 时，代理主动阻塞请求10s。
-后端需要返回及时返回数据时候，调用代理/cancel 方法主动取消阻塞。
-可选支持redis Subscribe 一个channel
+后端需要返回及时返回数据时候，调用代理/cancel 方法主动取消阻塞。  
+可选支持redis Subscribe 一个channel  
+头部增加x-backend 支持重新指定后端  
 
 # 最佳实践
 使用 HTTP 长轮询技术实现微信扫码登录可以提供实时的登录状态更新。
