@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 var transport = &http.Transport{
@@ -36,7 +40,7 @@ var (
 
 )
 
-type StatusResponse struct {
+type StatusResponse struct { //统计结构
 	Goroutines   int    `json:"goroutines"`
 	BlockCount   int    `json:"block_count"`
 	RequestCount int32  `json:"request_count"`
@@ -49,6 +53,7 @@ func main() {
 	// 通过命令行参数指定运行端口和后端地址
 	port := flag.Int("port", 8080, "The port number to run the proxy server")
 	backend := flag.String("backend", "", "The backend server URL")
+	redisProtocol := flag.String("redis", "", "Subscribe from Redis, like this:redis://localhost:6379?password=hello&channel=weixin")
 	debug := flag.Int("debug", 0, "show debug log")
 	flag.Parse()
 
@@ -77,6 +82,57 @@ func main() {
 	BlockServer = "http://" + serverIp + ":" + strconv.Itoa(*port)
 	log.Println("BlockServer:", BlockServer)
 
+	//判断是否需要redis
+	if *redisProtocol != "" {
+		//订阅redis
+		parsedURL, err := url.Parse(*redisProtocol)
+		if err != nil {
+			fmt.Println("解析 URL 失败:", err)
+			return
+		}
+
+		// 获取主机和端口
+		redisHost := parsedURL.Hostname()
+		redisPort := parsedURL.Port()
+
+		// 获取参数
+		queryParams := parsedURL.Query()
+		redisPwd := queryParams.Get("password")
+		if redisPort == "" {
+			redisPort = "6379"
+		}
+		redisDbStr := queryParams.Get("db")
+		redisDB := 0
+		if redisDbStr != "" {
+			redisDB, _ = strconv.Atoi(redisDbStr)
+		}
+		redisChannel := queryParams.Get("channel")
+
+		rdb := redis.NewClient(&redis.Options{
+			Addr:     fmt.Sprintf("%s:%s", redisHost, redisPort),
+			Password: redisPwd, // no password set
+			DB:       redisDB,  // use default DB
+		})
+		ctx := context.Background()
+		log.Println(rdb)
+		// 使用 Ping() 方法来测试连接
+		pong, err := rdb.Ping(ctx).Result()
+		if err != nil {
+			fmt.Println("redis connect error:", err)
+			return
+		}
+
+		// 判断连接是否成功
+		if pong == "PONG" {
+			log.Println("connet ok")
+		} else {
+			log.Println("connet fail")
+		}
+
+		go subscribeCancel(rdb, ctx, redisChannel)
+		log.Printf("subscribe redis:%s:%s chanel:%s", redisHost, redisPort, redisChannel)
+	}
+
 	//http.HandleFunc("/", helloHandler)
 	http.HandleFunc("/cancel", cancelBlockHandler) //取消阻塞
 	http.HandleFunc("/status", statusHandler)      //状态
@@ -102,6 +158,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 配置后端服务器地址
 	backendURL := backendBase + r.URL.Path
+	backend := r.Header.Get("x-backend")
+	if backend != "" {
+		backendURL = backend + r.URL.Path //重置后端请求
+	}
 	log.Printf("%s %s", r.Method, backendURL)
 
 	// 创建代理请求
@@ -266,6 +326,35 @@ func cancelBlockHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"code":0, "msg":"sucess","cancelok":true}`))
+}
+
+// 订阅redis,取消阻塞
+func subscribeCancel(rdb *redis.Client, ctx context.Context, channel string) {
+	sub := rdb.Subscribe(ctx, channel)
+	defer sub.Close()
+	log.Println(sub)
+
+	ch := sub.Channel()
+
+	for msg := range ch {
+		log.Println(msg.Channel, msg.Payload)
+		etag := strings.TrimSpace(msg.Payload)
+		cancelCh, ok := blockMap[etag]
+		if !ok {
+			log.Printf("redis etag:%s is not found", etag)
+			continue
+		}
+
+		delete(blockMap, etag) //主动删除map
+
+		//线程不安全，小心重复关闭
+		select {
+		case cancelCh <- struct{}{}:
+			log.Printf("redis tag:%s cancelCh is send", etag)
+		default:
+			log.Printf("redis cancelCh is closed")
+		}
+	}
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
